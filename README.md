@@ -13,7 +13,7 @@ source activate py3.6
 ```
 ## Instructions
 To train a DY2P agent on the ```cartpole swingup ``` task from images, you can run:
-```sh
+```
 python train.py \
             --domain_name cartpole  \
             --task_name swingup  \
@@ -32,6 +32,7 @@ python train.py \
             --kl_use_target True \
 ```
 or you can run the script for all six tasks:
-```sh train.sh
+```
+sh train.sh
 ```
 
