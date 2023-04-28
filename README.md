@@ -33,6 +33,6 @@ python train.py \
 ```
 or you can run the script for all six tasks:
 ```
-sh train.sh
+bash train.sh
 ```
 
