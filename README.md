@@ -1,9 +1,9 @@
-# DY2P  
+# Dynamic Bottleneck with a Predictable Prior for Image-based Deep Reinforcement Learning (DY2P)  
 
-This repository is the official pytorch implementation of DY2P for the DeepMind control experiments. Our implementation is based on [SAC+AE](https://github.com/denisyarats/pytorch_sac_ae).   
+This repository is the official implementation of DY2P. Our implementation is based on [SAC+AE](https://github.com/denisyarats/pytorch_sac_ae).   
 
 ## Requirements  
-It is simple to install required dependencies by running:  
+Required dependencies of this repo can be installed by running:  
 ```sh
 conda env create -f environment.yml  
 ```
@@ -15,12 +15,12 @@ source activate py3.6
 To train a DY2P agent on the ```cartpole swingup ``` task from images, you can run:
 ```sh
 python train.py \
-            --domain_name ${domain[$i]}  \
-            --task_name ${task[$i]}  \
-            --action_repeat ${ar[$i]} \
+            --domain_name cartpole  \
+            --task_name swingup  \
+            --action_repeat 8 \
             --save_tb \
-            --seed $s \
-            --eval_freq ${ef[$i]} \
+            --seed 0 \
+            --eval_freq 1250 \
             --batch_size 512 \
             --pre_transform_image_size 84 \
             --image_size 84 \
@@ -30,7 +30,6 @@ python train.py \
             --omega_cody_loss 0.01 \
             --fc_output_logits True \
             --kl_use_target True \
-            --num_train_steps ${ns[$i]}
 ```
 or you can run the script for all six tasks:
 ```sh train.sh
