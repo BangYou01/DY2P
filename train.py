@@ -1,18 +1,25 @@
 import numpy as np
 import torch
 import argparse
+from experiment_launcher import run_experiment
+from experiment_launcher.launcher import add_launcher_base_args, get_experiment_default_params
 import os
+import math
+import gym
+import sys
+import random
 import time
-import datetime
 import json
-import dmc2gym_local
 import dmc2gym
+import copy
+import datetime
 
 import utils
 from logger import Logger
 from video import VideoRecorder
 
 from cody_sac import CodySacAgent
+from torchvision import transforms
 
 
 def parse_args():
@@ -21,81 +28,86 @@ def parse_args():
     parser = argparse.ArgumentParser()
     # environment
     # 给一个 ArgumentParser 添加程序参数信息是通过调用 add_argument() 方法完成的。
-    parser.add_argument('--domain_name', default='finger')
-    parser.add_argument('--task_name', default='spin')
-    parser.add_argument('--action_repeat', default=1, type=int)
-    parser.add_argument('--num_train_steps', default=1000000, type=int)
-    parser.add_argument('--work_dir', default='data', type=str)  # modify
+    parser.add_argument('--domain-name', type=str)
+    parser.add_argument('--task-name', type=str)
+    parser.add_argument('--action-repeat', type=int)
+    parser.add_argument('--num-train-steps', type=int)
+    parser.add_argument('--results-dir', type=str)  # modify
 
-    # multi-modal
-    parser.add_argument('--fusion_method', default='*', type=str, help="switch fusion method, joint_elbo, poe or moe")
-    parser.add_argument('--modality_poe', type=bool, default=False, help="modality fusion by PoE")
-    parser.add_argument('--joint_elbo', type=bool, default=False, help="modality fusion by MoPoE")
-    parser.add_argument('--modality_moe', type=bool, default=False, help="modality fusion by MoE")
-    
     # Hyperparameters
-    parser.add_argument('--cody_lr', default=1e-4, type=float)
-    parser.add_argument('--omega_cody_loss', default=0.001, type=float)
-    parser.add_argument('--predictor_cat', default=True, action='store_false')
+    parser.add_argument('--cody-lr', type=float)
+    parser.add_argument('--omega-cody-loss', type=float)
+    parser.add_argument('--time-step', type=int)
+    parser.add_argument('--intrinsic-reward-scale', type=float)
+    parser.add_argument('--use-external-reward', action='store_true')
+    parser.add_argument('--fc-output-logits', type=float)
+    parser.add_argument('--kl-use-target', type=float)
 
-    parser.add_argument('--pre_transform_image_size', default=84, type=int)
-    parser.add_argument('--image_size', default=84, type=int)
-    parser.add_argument('--frame_stack', default=3, type=int)
+    # natural distractor
+    parser.add_argument('--add-distractor', action='store_true')
+    parser.add_argument('--img-source', type=str)
+    parser.add_argument('--total-frames', type=int)
+    # parser.add_argument('--resource-files', type=str)
+    # parser.add_argument('--eval-resource-files', type=str)
+
+    parser.add_argument('--pre-transform-image-size', type=int)
+    parser.add_argument('--image-size', type=int)
+    parser.add_argument('--frame-stack', type=int)
     # replay buffer
-    parser.add_argument('--replay_buffer_capacity', default=100000, type=int)
+    parser.add_argument('--replay-buffer-capacity', type=int)
     # train
-    parser.add_argument('--agent', default='cody_sac', type=str)
-    parser.add_argument('--init_steps', default=1000, type=int)
+    parser.add_argument('--agent', type=str)
+    parser.add_argument('--init-steps', type=int)
 
-    parser.add_argument('--batch_size', default=32, type=int)
-    parser.add_argument('--hidden_dim', default=1024, type=int)
+    parser.add_argument('--batch-size', type=int)
+    parser.add_argument('--hidden-dim', type=int)
     # eval
-    parser.add_argument('--eval_freq', default=1000, type=int)
-    parser.add_argument('--num_eval_episodes', default=10, type=int)
+    parser.add_argument('--eval-freq', type=int)
+    parser.add_argument('--num-eval-episodes', type=int)
     # critic
-    parser.add_argument('--critic_lr', default=1e-3, type=float)
-    parser.add_argument('--critic_beta', default=0.9, type=float)
-    parser.add_argument('--critic_tau', default=0.01, type=float) # try 0.05 or 0.1
-    parser.add_argument('--critic_target_update_freq', default=2, type=int) # try to change it to 1 and retain 0.01 above
+    parser.add_argument('--critic-lr', type=float)
+    parser.add_argument('--critic-beta', type=float)
+    parser.add_argument('--critic-tau', type=float)  # try 0.05 or 0.1
+    parser.add_argument('--critic-target-update-freq',
+                        type=int)  # try to change it to 1 and retain 0.01 above
     # actor
-    parser.add_argument('--actor_lr', default=1e-3, type=float)
-    parser.add_argument('--actor_beta', default=0.9, type=float)
-    parser.add_argument('--actor_log_std_min', default=-10, type=float)
-    parser.add_argument('--actor_log_std_max', default=2, type=float)
-    parser.add_argument('--actor_update_freq', default=2, type=int)
+    parser.add_argument('--actor-lr', type=float)
+    parser.add_argument('--actor-beta', type=float)
+    parser.add_argument('--actor-log-std-min', type=float)
+    parser.add_argument('--actor-log-std-max', type=float)
+    parser.add_argument('--actor-update-freq', type=int)
     # encoder
-    parser.add_argument('--encoder_type', default='pixel', type=str)
-    parser.add_argument('--encoder_feature_dim', default=50, type=int)
-    parser.add_argument('--encoder_lr', default=1e-3, type=float)
-    parser.add_argument('--encoder_tau', default=0.05, type=float)
-    parser.add_argument('--num_layers', default=4, type=int)
-    parser.add_argument('--num_filters', default=32, type=int)
-    parser.add_argument('--cody_latent_dim', default=128, type=int)
+    parser.add_argument('--encoder-type', type=str)
+    parser.add_argument('--encoder-feature-dim', type=int)
+    parser.add_argument('--encoder-lr', type=float)
+    parser.add_argument('--encoder-tau', type=float)
+    parser.add_argument('--num-layers', type=int)
+    parser.add_argument('--num-filters', type=int)
+    parser.add_argument('--cody-latent-dim', type=int)
     # sac
-    parser.add_argument('--discount', default=0.99, type=float)
-    parser.add_argument('--init_temperature', default=0.1, type=float)
-    parser.add_argument('--alpha_lr', default=1e-4, type=float)
-    parser.add_argument('--alpha_beta', default=0.5, type=float)
+    parser.add_argument('--discount', type=float)
+    parser.add_argument('--init-temperature', type=float)
+    parser.add_argument('--alpha-lr', type=float)
+    parser.add_argument('--alpha-beta', type=float)
     # misc
-    parser.add_argument('--seed', default=1, type=int)
+    parser.add_argument('--seed', type=int)
 
-    parser.add_argument('--save_tb', default=False, action='store_true')
-    parser.add_argument('--save_buffer', default=False, action='store_true')
-    parser.add_argument('--save_video', default=False, action='store_true')
-    parser.add_argument('--save_model', default=False, action='store_true')
-    parser.add_argument('--load_model', default=False, action='store_true')
-    parser.add_argument('--detach_encoder', default=False, action='store_true')
+    parser.add_argument('--save-tb', action='store_true')
+    parser.add_argument('--save-buffer', action='store_true')
+    parser.add_argument('--save-video', action='store_true')
+    parser.add_argument('--save-model', action='store_true')
+    parser.add_argument('--save-embedding', action='store_true')
+    parser.add_argument('--detach-encoder', action='store_true')
 
-    parser.add_argument('--log_interval', default=100, type=int)
-
-    parser.add_argument('--natural', default=False, action='store_true')
+    parser.add_argument('--log-interval', type=int)
 
     # ArgumentParser 通过 parse_args() 方法解析参数。它将检查命令行，把每个参数转换为适当的类型然后调用相应的操作。
+    parser = add_launcher_base_args(parser)
+    parser.set_defaults(**get_experiment_default_params(experiment))
     args = parser.parse_args()
     return vars(args)
 
-
-def evaluate(env, agent, video, num_episodes, L, step, args):
+def evaluate(env, agent, video, num_episodes, L, step, args, viz=False, device=None, embed_viz_dir=None):
     '''
     Evaluate the agent
 
@@ -105,6 +117,11 @@ def evaluate(env, agent, video, num_episodes, L, step, args):
     num_episodes: the number of episodes per evaluation
     '''
     all_ep_rewards = []
+
+    # embedding visualization
+    obses = []
+    rewards_vis = []
+    embeddings = []
 
     def run_eval_loop(sample_stochastically=True):
         start_time = time.time()
@@ -120,15 +137,28 @@ def evaluate(env, agent, video, num_episodes, L, step, args):
                         action = agent.sample_action(obs)
                     else:
                         action = agent.select_action(obs)
+
                 obs, reward, done, _ = env.step(action)
                 video.record(env)
                 episode_reward += reward
 
+                if viz:
+                    obses.append(obs)
+                    with torch.no_grad():
+                        # Note that reward in [0, 1 * action_repeat]
+                        rewards_vis.append(reward)
+                        _, _, state, _ = agent.critic.encoder(torch.Tensor(obs).unsqueeze(0).to(device))
+                        embeddings.append(state.cpu().detach().numpy())
+
             video.save('%d.mp4' % step)
             L.log('eval/' + prefix + 'episode_reward', episode_reward, step)
             all_ep_rewards.append(episode_reward)
-        
-        L.log('eval/' + prefix + 'eval_time', time.time()-start_time , step)
+
+        if viz:
+            dataset = {'obs': obses, 'rewards': rewards_vis, 'embeddings': embeddings}
+            torch.save(dataset, '%s/train_dataset_%s.pt' % (embed_viz_dir, step))
+
+        L.log('eval/' + prefix + 'eval_time', time.time() - start_time, step)
         mean_ep_reward = np.mean(all_ep_rewards)
         best_ep_reward = np.max(all_ep_rewards)
         L.log('eval/' + prefix + 'mean_episode_reward', mean_ep_reward, step)
@@ -138,13 +168,13 @@ def evaluate(env, agent, video, num_episodes, L, step, args):
     L.dump(step)
 
 
-def make_agent(obs_shape, action_shape, args, device):
+def make_agent(obs_shape, action_shape, args, device, action_repeat):
     if args.agent == 'cody_sac':
         return CodySacAgent(
-            args=args,
             obs_shape=obs_shape,
             action_shape=action_shape,
             device=device,
+            action_repeat=action_repeat,
             hidden_dim=args.hidden_dim,
             discount=args.discount,
             init_temperature=args.init_temperature,
@@ -160,7 +190,7 @@ def make_agent(obs_shape, action_shape, args, device):
             critic_tau=args.critic_tau,
             critic_target_update_freq=args.critic_target_update_freq,
             encoder_type=args.encoder_type,
-            feat_dim=args.encoder_feature_dim,
+            encoder_feature_dim=args.encoder_feature_dim,
             encoder_lr=args.encoder_lr,
             encoder_tau=args.encoder_tau,
             num_layers=args.num_layers,
@@ -170,219 +200,230 @@ def make_agent(obs_shape, action_shape, args, device):
             cody_latent_dim=args.cody_latent_dim,
             cody_lr=args.cody_lr,
             omega_cody_loss=args.omega_cody_loss,
-            predictor_cat=args.predictor_cat
+            time_step=args.time_step,
+            intrinsic_reward_scale=args.intrinsic_reward_scale,
+            use_external_reward=args.use_external_reward,
+            kl_use_target=args.kl_use_target,
+            fc_output_logits=args.fc_output_logits
         )
     else:
         assert 'agent is not supported: %s' % args.agent
 
 
-def main(
-        domain_name,
-        task_name,
-        pre_transform_image_size,
-        image_size,
-        action_repeat,
-        frame_stack,
-        replay_buffer_capacity,
-        fusion_method,
-        modality_poe,
-        joint_elbo,
-        modality_moe,
-        agent,
-        init_steps,
-        num_train_steps,
-        batch_size,
-        hidden_dim,
-        eval_freq,
-        num_eval_episodes,
-        critic_lr,
-        critic_beta,
-        critic_tau,
-        critic_target_update_freq,
-        actor_lr,
-        actor_beta,
-        actor_log_std_min,
-        actor_log_std_max,
-        actor_update_freq,
-        encoder_type,
-        encoder_feature_dim,
-        encoder_lr,
-        encoder_tau,
-        num_layers,
-        num_filters,
-        cody_latent_dim,
-        discount,
-        init_temperature,
-        alpha_lr,
-        alpha_beta,
-        save_tb,
-        save_buffer,
-        save_video,
-        save_model,
-        load_model,
-        detach_encoder,
-        cody_lr,
-        omega_cody_loss,
-        predictor_cat,
-        log_interval,
-        seed,
-        work_dir,
-        natural
+def experiment(
+        domain_name: str = 'cartpole',
+        task_name: str = 'swingup',
+        pre_transform_image_size: int = 84,
+        image_size: int = 84,
+        action_repeat: int = 8,
+        frame_stack: int = 3,
+        replay_buffer_capacity: int = 100000,
+        agent: str = 'cody_sac',
+        init_steps: int = 1000,
+        num_train_steps: int = 63000,
+        batch_size: int = 128,
+        hidden_dim: int = 1024,
+        eval_freq: int = 10000,
+        num_eval_episodes: int = 10,
+        critic_lr: float = 1e-3,
+        critic_beta: float = 0.9,
+        critic_tau: float = 0.01,
+        critic_target_update_freq: int = 2,
+        actor_lr: float = 1e-3,
+        actor_beta: float = 0.9,
+        actor_log_std_min: float = -10,
+        actor_log_std_max: float = 2,
+        actor_update_freq: int = 2,
+        encoder_type: str = 'pixel',
+        encoder_feature_dim: int = 50,
+        encoder_lr: float = 1e-3,
+        encoder_tau: float = 0.05,
+        num_layers: int = 4,
+        num_filters: int = 32,
+        cody_latent_dim: int = 128,
+        discount: float = 0.99,
+        init_temperature: float = 0.1,
+        alpha_lr: float = 1e-4,
+        alpha_beta: float = 0.5,
+        save_tb: bool = True,
+        save_buffer: bool = False,
+        save_video: bool = False,
+        save_model: bool = False,
+        save_embedding: bool = False,
+        detach_encoder: bool = False,
+        cody_lr: float = 1e-4,
+        omega_cody_loss: float = 1e-5,
+        time_step: int = 2,
+        intrinsic_reward_scale: float = 0.1,
+        use_external_reward: bool = True,
+        kl_use_target: bool = True,
+        fc_output_logits: bool = True,
+        add_distractor: bool = False,
+        img_source: str = 'video',
+        total_frames: int = 1000,
+        # resource_files,
+        # eval_resource_files,
+        log_interval: int = 100,
+        seed: int = 0,
+        results_dir: str = '/logs'
 ):
 
+    resource_files = './'
+    eval_resource_files = './'
+
+    # check parameters
     args = utils.Namespace(
-        domain_name = domain_name,
-        task_name = task_name,
-        pre_transform_image_size = pre_transform_image_size,
-        image_size = image_size,
-        action_repeat = action_repeat,
-        frame_stack = frame_stack,
-        replay_buffer_capacity = replay_buffer_capacity,
-        fusion_method = fusion_method,
-        modality_poe = modality_poe,
-        joint_elbo = joint_elbo,
-        modality_moe = modality_moe,
-        agent = agent,
-        init_steps = init_steps,
-        num_train_steps = num_train_steps,
-        batch_size = batch_size,
-        hidden_dim = hidden_dim,
-        eval_freq = eval_freq,
-        num_eval_episodes = num_eval_episodes,
-        critic_lr = critic_lr,
-        critic_beta = critic_beta,
-        critic_tau = critic_tau,
-        critic_target_update_freq = critic_target_update_freq,
-        actor_lr = actor_lr,
-        actor_beta = actor_beta,
-        actor_log_std_min = actor_log_std_min,
-        actor_log_std_max = actor_log_std_max,
-        actor_update_freq = actor_update_freq,
-        encoder_type = encoder_type,
-        encoder_feature_dim = encoder_feature_dim,
-        encoder_lr = encoder_lr,
-        encoder_tau = encoder_tau,
-        num_layers = num_layers,
-        num_filters = num_filters,
-        cody_latent_dim = cody_latent_dim,
-        discount = discount,
-        init_temperature = init_temperature,
-        alpha_lr = alpha_lr,
-        alpha_beta = alpha_beta,
-        save_tb = save_tb,
-        save_buffer = save_buffer,
-        save_video = save_video,
-        save_model= save_model,
-        load_model = load_model,
-        detach_encoder = detach_encoder,
-        cody_lr = cody_lr,
-        omega_cody_loss = omega_cody_loss,
-        predictor_cat = predictor_cat,
-        log_interval = log_interval,
-        seed = seed,
-        work_dir = work_dir,
-        natural = natural
+        domain_name=domain_name,
+        task_name=task_name,
+        pre_transform_image_size=pre_transform_image_size,
+        image_size=image_size,
+        action_repeat=action_repeat,
+        frame_stack=frame_stack,
+        replay_buffer_capacity=replay_buffer_capacity,
+        agent=agent,
+        init_steps=init_steps,
+        num_train_steps=num_train_steps,
+        batch_size=batch_size,
+        hidden_dim=hidden_dim,
+        eval_freq=eval_freq,
+        num_eval_episodes=num_eval_episodes,
+        critic_lr=critic_lr,
+        critic_beta=critic_beta,
+        critic_tau=critic_tau,
+        critic_target_update_freq=critic_target_update_freq,
+        actor_lr=actor_lr,
+        actor_beta=actor_beta,
+        actor_log_std_min=actor_log_std_min,
+        actor_log_std_max=actor_log_std_max,
+        actor_update_freq=actor_update_freq,
+        encoder_type=encoder_type,
+        encoder_feature_dim=encoder_feature_dim,
+        encoder_lr=encoder_lr,
+        encoder_tau=encoder_tau,
+        num_layers=num_layers,
+        num_filters=num_filters,
+        cody_latent_dim=cody_latent_dim,
+        discount=discount,
+        init_temperature=init_temperature,
+        alpha_lr=alpha_lr,
+        alpha_beta=alpha_beta,
+        save_tb=save_tb,
+        save_buffer=save_buffer,
+        save_video=save_video,
+        save_model=save_model,
+        save_embedding=save_embedding,
+        detach_encoder=detach_encoder,
+        cody_lr=cody_lr,
+        omega_cody_loss=omega_cody_loss,
+        time_step=time_step,
+        intrinsic_reward_scale=intrinsic_reward_scale,
+        use_external_reward=use_external_reward,
+        kl_use_target=kl_use_target,
+        fc_output_logits=fc_output_logits,
+        resource_files=resource_files,
+        eval_resource_files=eval_resource_files,
+        add_distractor=add_distractor,
+        img_source=img_source,
+        total_frames=total_frames,
+        log_interval=log_interval,
+        seed=seed,
+        results_dir=results_dir
     )
 
+    os.makedirs(results_dir, exist_ok=True)
+    utils.set_seed_everywhere(seed)
 
-    if args.seed == -1: 
-        args.__dict__["seed"] = np.random.randint(1,1000000)
-    utils.set_seed_everywhere(args.seed)
+    if args.add_distractor:
+        from distractor import dmc2gym_local
+        env = dmc2gym_local.make(
+            domain_name=args.domain_name,
+            task_name=args.task_name,
+            resource_files=resource_files,
+            img_source=args.img_source,
+            total_frames=args.total_frames,
+            seed=args.seed,
+            visualize_reward=False,
+            from_pixels=(args.encoder_type == 'pixel'),
+            height=args.pre_transform_image_size,
+            width=args.pre_transform_image_size,
+            frame_skip=args.action_repeat,
+            frame_stack=args.frame_stack,
+            extra='train',
+        )
 
-    # choose fusion method
-    if args.fusion_method == 'poe':
-        args.modality_poe = True
-    elif args.fusion_method == 'joint_elbo':
-        args.joint_elbo = True
-    elif args.fusion_method == 'moe':
-        args.modality_moe = True
+        eval_env = dmc2gym_local.make(
+            domain_name=args.domain_name,
+            task_name=args.task_name,
+            resource_files=eval_resource_files,
+            img_source=args.img_source,
+            total_frames=args.total_frames,
+            seed=args.seed,
+            visualize_reward=False,
+            from_pixels=(args.encoder_type == 'pixel'),
+            height=args.pre_transform_image_size,
+            width=args.pre_transform_image_size,
+            frame_skip=args.action_repeat,
+            frame_stack=args.frame_stack,
+            extra='eval',
+        )
 
-    env = dmc2gym.make(
-        # dm_control suite env
-        domain_name=args.domain_name,
-        task_name=args.task_name,
-        # Reliable random seed initialization that will ensure deterministic behaviour.
-        seed=args.seed,
-        visualize_reward=False,
-        # Setting from_pixels=True converts proprioceptive observations into image-based.
-        # In additional, choose the image dimensions, by setting height and width.
-        from_pixels=(args.encoder_type == 'pixel'),
-        height=args.pre_transform_image_size,
-        width=args.pre_transform_image_size,
-        # Setting frame_skip argument lets to perform action repeat
-        frame_skip=args.action_repeat,
-    )
-    test_env = dmc2gym.make(
-        # dm_control suite env
-        domain_name=args.domain_name,
-        task_name=args.task_name,
-        # Reliable random seed initialization that will ensure deterministic behaviour.
-        seed=args.seed,
-        visualize_reward=False,
-        # Setting from_pixels=True converts proprioceptive observations into image-based.
-        # In additional, choose the image dimensions, by setting height and width.
-        from_pixels=(args.encoder_type == 'pixel'),
-        height=args.pre_transform_image_size,
-        width=args.pre_transform_image_size,
-        # Setting frame_skip argument lets to perform action repeat
-        frame_skip=args.action_repeat,
-    )
+    else:
+        env = dmc2gym.make(
+            # dm_control suite env
+            domain_name=args.domain_name,
+            task_name=args.task_name,
+            # Reliable random seed initialization that will ensure deterministic behaviour.
+            seed=args.seed,
+            visualize_reward=False,
+            # Setting from_pixels=True converts proprioceptive observations into image-based.
+            # In additional, choose the image dimensions, by setting height and width.
+            from_pixels=(args.encoder_type == 'pixel'),
+            height=args.pre_transform_image_size,
+            width=args.pre_transform_image_size,
+            # Setting frame_skip argument lets to perform action repeat
+            frame_skip=args.action_repeat
+        )
 
-    print('original env observation_space: ', env.observation_space)
-    env.seed(args.seed)  #Setting env_seed
+    env.seed(args.seed)  # Setting env_seed
+    if args.add_distractor:
+        eval_env.seed(args.seed)
 
-    if args.natural:
-        data = utils.load_imgnet(train=True)
-        env = utils.NaturalMujoco(env, data)
-        data = utils.load_imgnet(train=False)
-        test_env = utils.NaturalMujoco(test_env, data)
     # stack several consecutive frames together
-    if args.encoder_type == 'pixel':
+    if args.encoder_type == 'pixel' and not args.add_distractor:
         env = utils.FrameStack(env, k=args.frame_stack)
-        test_env = utils.FrameStack(test_env, k=args.frame_stack)
-    # NOTE: The type of `n_contact` is int64 actually, but it is still presented float32 here.
-    # Because we will not use it.
-    print('FrameStack env observation_space: ', env.observation_space)
 
     # make directory
     ts = datetime.datetime.fromtimestamp(time.time()).strftime("%m-%d-%H-%M")
     env_name = args.domain_name + '-' + args.task_name
-    exp_name = env_name + '-' + str(ts) + '-im' + str(args.image_size) +'-b'  \
-    + str(args.batch_size) + '-s' + str(args.seed)  + '-' + args.encoder_type
-    args.work_dir = args.work_dir + '/' + exp_name
-    utils.make_dir(args.work_dir)
+    exp_name = env_name + '-s' + str(args.seed)
+    args.results_dir = args.results_dir + '/' + 'codypro_' + args.domain_name + '/' + exp_name
+    print(args.results_dir)
 
-    # utils.print_env_info(env)
-    
-    # utils.save_imgs(env, env_name, args.work_dir, args.frame_stack, 20)
-    
-    if args.save_video:
-        video_dir = utils.make_dir(os.path.join(args.work_dir, 'video'))
-    if args.save_model:
-        model_dir = utils.make_dir(os.path.join(args.work_dir, 'model'))
-    if args.save_buffer:
-        buffer_dir = utils.make_dir(os.path.join(args.work_dir, 'buffer'))
+    utils.make_dir(args.results_dir)
+    video_dir = utils.make_dir(os.path.join(args.results_dir, 'video'))
+    model_dir = utils.make_dir(os.path.join(args.results_dir, 'model'))
+    buffer_dir = utils.make_dir(os.path.join(args.results_dir, 'buffer'))
+    embedding_dir = utils.make_dir(os.path.join(args.results_dir, 'embedding'))
 
     video = VideoRecorder(video_dir if args.save_video else None)
 
     # open the file args.json in work_dir and write args into args.json
-    with open(os.path.join(args.work_dir, 'args.json'), 'w') as f:
+    with open(os.path.join(args.results_dir, 'args.json'), 'w') as f:
         json.dump(vars(args), f, sort_keys=True, indent=4)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    args.device = device
 
     action_shape = env.action_space.shape
 
     if args.encoder_type == 'pixel':
-        obs_space = env.observation_space
-        obs_shape = obs_space.shape
+        obs_shape = (3 * args.frame_stack, args.image_size, args.image_size)
+        pre_aug_obs_shape = (3 * args.frame_stack, args.pre_transform_image_size, args.pre_transform_image_size)
     else:
         obs_shape = env.observation_space.shape
         pre_aug_obs_shape = obs_shape
 
     replay_buffer = utils.ReplayBuffer(
-        obs_shape=obs_shape,
+        obs_shape=pre_aug_obs_shape,
         action_shape=action_shape,
         capacity=args.replay_buffer_capacity,
         batch_size=args.batch_size,
@@ -394,12 +435,12 @@ def main(
         obs_shape=obs_shape,
         action_shape=action_shape,
         args=args,
-        device=device
+        device=device,
+        action_repeat=args.action_repeat
     )
 
-
     # tensorboard visualization
-    L = Logger(args.work_dir, use_tb=args.save_tb)
+    L = Logger(args.results_dir, use_tb=args.save_tb)
 
     episode, episode_reward, done = 0, 0, True
     start_time = time.time()
@@ -409,8 +450,11 @@ def main(
 
         if step % args.eval_freq == 0:
             L.log('eval/episode', episode, step)
-            evaluate(test_env, agent, video, args.num_eval_episodes, L, step,args)
-            if args.save_model and episode % 100 == 0:
+            if args.add_distractor:
+                evaluate(eval_env, agent, video, args.num_eval_episodes, L, step, args, viz=args.save_embedding, embed_viz_dir=embedding_dir, device=device)
+            else:
+                evaluate(env, agent, video, args.num_eval_episodes, L, step, args, viz=args.save_embedding, embed_viz_dir=embedding_dir, device=device)
+            if args.save_model:
                 agent.save_cody(model_dir, step)
             if args.save_buffer:
                 replay_buffer.save(buffer_dir)
@@ -448,13 +492,17 @@ def main(
                 agent.update(replay_buffer, L, step)
 
         next_obs, reward, done, _ = env.step(action)
+        if done and episode_step + 1 < env._max_episode_steps:
+            print("episode finished")
 
-        # allow infinit bootstrap
-        # the done_bool= 1 is only used to recognize trajectories.
+
+        # limit infinit bootstrap
+        # the done_bool= 1 is only used to recognize the different trajectories but it should be zero.
         done_bool = 1 if episode_step + 1 == env._max_episode_steps else float(
             done
         )
         episode_reward += reward
+        #print('episode_step:{}, done:{}, done_bool:{}'.format(episode_step, done, done_bool))
         replay_buffer.add(obs, action, reward, next_obs, done_bool)
 
         obs = next_obs
@@ -464,7 +512,11 @@ def main(
 if __name__ == '__main__':
     torch.multiprocessing.set_start_method('spawn')
 
-    # parameter dict
-    args_parse = parse_args()
+    # Additional Info when using cuda
+    # if device.type == 'cuda':
+    #     print(torch.cuda.get_device_name(0))
+    #     print('Memory Usage:')
+    #     print('Allocated:', round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1), 'GB')
+    #     print('Cached:   ', round(torch.cuda.memory_cached(0) / 1024 ** 3, 1), 'GB')
 
-    main(**args_parse)
+    run_experiment(experiment)
