@@ -1,4 +1,4 @@
-# Dynamic Bottleneck with a Predictable Prior for Image-based Deep Reinforcement Learning (DY2P)  
+# XXX (DY2P)  
 
 This repository is the official implementation of DY2P. Our implementation is based on [SAC+AE](https://github.com/denisyarats/pytorch_sac_ae).   
 
