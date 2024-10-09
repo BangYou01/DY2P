@@ -182,13 +182,13 @@ class Critic(nn.Module):
             L.log_param('train_critic/q2_fc%d' % i, self.Q2.trunk[i * 2], step)
 
 
-class Cody(nn.Module):
+class Dypre(nn.Module):
     """
     Auxiliary task
     """
 
     def __init__(self, z_dim, critic, critic_target, action_shape,  output_type="continuous", fc_output_logits=True, kl_use_target=True):
-        super(Cody, self).__init__()
+        super().__init__()
 
 
         # Build online encoders
@@ -279,7 +279,7 @@ class Cody(nn.Module):
         return logits
 
 
-class CodySacAgent(object):
+class DypreSacAgent(object):
     """Representation learning with SAC."""
     def __init__(
             self,
@@ -310,10 +310,10 @@ class CodySacAgent(object):
             cpc_update_freq=1,
             log_interval=100,
             detach_encoder=False,
-            cody_latent_dim=128,
-            cody_lr=1e-7,
-            omega_cody_loss=0.1,
-            beta_cody=1,
+            dypre_latent_dim=128,
+            dypre_lr=1e-7,
+            omega_dypre_loss=0.1,
+            beta_dypre=1,
             time_step=3,
             intrinsic_reward_scale=0.1,
             use_external_reward=True,
@@ -329,11 +329,11 @@ class CodySacAgent(object):
         self.cpc_update_freq = cpc_update_freq
         self.log_interval = log_interval
         self.image_size = obs_shape[-1]
-        self.cody_latent_dim = cody_latent_dim
+        self.dypre_latent_dim = dypre_latent_dim
         self.detach_encoder = detach_encoder
         self.encoder_type = encoder_type
-        self.omega_cody_loss = omega_cody_loss
-        self.beta_cody = beta_cody
+        self.omega_dypre_loss = omega_dypre_loss
+        self.beta_dypre = beta_dypre
         self.time_step = time_step
         self.intrinsic_reward_scale = intrinsic_reward_scale
         self.use_external_reward = use_external_reward
@@ -368,7 +368,7 @@ class CodySacAgent(object):
             param_encoder_target.data.copy_(param_encoder.data)  # initialize
             param_encoder_target.requires_grad = False
 
-        # tie encoders between actor and critic, and Cody and critic
+        # tie encoders between actor and critic, and dypre and critic
         self.actor.encoder.copy_conv_weights_from(self.critic.encoder)
 
         self.log_alpha = torch.tensor(np.log(init_temperature)).to(device)
@@ -390,7 +390,7 @@ class CodySacAgent(object):
         )
 
         if self.encoder_type == 'pixel':
-            self.cody = Cody(encoder_feature_dim, self.critic, self.critic_target, action_shape,
+            self.dypre = Dypre(encoder_feature_dim, self.critic, self.critic_target, action_shape,
                              output_type='continuous', fc_output_logits=fc_output_logits, kl_use_target=kl_use_target).to(self.device)
 
             self.encoder_optimizer = torch.optim.Adam(
@@ -398,7 +398,7 @@ class CodySacAgent(object):
             )
 
             self.cpc_optimizer = torch.optim.Adam(
-                self.cody.parameters(), lr=cody_lr
+                self.dypre.parameters(), lr=dypre_lr
             )
         self.cross_entropy_loss = nn.CrossEntropyLoss()
         self.cross_entropy_loss_no_reduction = nn.CrossEntropyLoss(reduction='none')
@@ -412,7 +412,7 @@ class CodySacAgent(object):
         self.actor.train(training)
         self.critic.train(training)
         if self.encoder_type == 'pixel':
-            self.cody.train(training)
+            self.dypre.train(training)
 
     @property
     def alpha(self):
@@ -491,21 +491,21 @@ class CodySacAgent(object):
         self.log_alpha_optimizer.step()
 
 
-    def update_cpc(self, obs_old, action_old, obs, action, next_obs, reward, L, step):
+    def update_dypre(self, obs_old, action_old, obs, action, next_obs, reward, L, step):
         """
         obs should be a list containing multimodal sensor data.
         action should be stacked and has shape [B, 3xdim].
         """
-        [z, z_next, [mu, logstd]] = self.cody.encode(obs, action, next_obs, action_condition=True)
-        kl = self.cody.kl_divergence(mu, logstd, obs_old, action_old)
+        [z, z_next, [mu, logstd]] = self.dypre.encode(obs, action, next_obs, action_condition=True)
+        kl = self.dypre.kl_divergence(mu, logstd, obs_old, action_old)
 
         # normalize the reward before feeding it into the net
         reward = reward / self.action_repeat
-        logits = self.cody.compute_logits(z, z_next, reward)
+        logits = self.dypre.compute_logits(z, z_next, reward)
         labels = torch.arange(logits.shape[0]).long().to(self.device)
         mi_loss = self.cross_entropy_loss(logits, labels)
 
-        loss = mi_loss + self.omega_cody_loss * kl
+        loss = mi_loss + self.omega_dypre_loss * kl
 
         self.encoder_optimizer.zero_grad()
         self.cpc_optimizer.zero_grad()
@@ -514,7 +514,7 @@ class CodySacAgent(object):
         self.encoder_optimizer.step()
         self.cpc_optimizer.step()
         if step % self.log_interval == 0:
-            L.log('train/cody_loss', loss, step)
+            L.log('train/dypre_loss', loss, step)
             L.log('train/mi', -1.0 * mi_loss, step)
             L.log('train/kl', kl, step)
 
@@ -555,12 +555,12 @@ class CodySacAgent(object):
             )
 
             utils.soft_update_params(
-                self.cody.predictor, self.cody.predictor_target,
+                self.dypre.predictor, self.dypre.predictor_target,
                 self.encoder_tau
             )
 
         if step % self.cpc_update_freq == 0 and self.encoder_type == 'pixel':
-            self.update_cpc(obs_old, action_old, obs, action, next_obs, reward, L, step)
+            self.update_dypre(obs_old, action_old, obs, action, next_obs, reward, L, step)
 
     def save(self, model_dir, step):
         torch.save(

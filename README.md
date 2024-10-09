@@ -1,6 +1,6 @@
-# DY2P
+# Dypre
 
-This repository is the official implementation of DY2P. Our implementation is based on [SAC+AE](https://github.com/denisyarats/pytorch_sac_ae).   
+This repository is the official implementation of Dypre. Our implementation is based on [SAC+AE](https://github.com/denisyarats/pytorch_sac_ae).   
 
 ## Requirements  
 Required dependencies of this repo can be installed by running:  
@@ -12,7 +12,7 @@ Then you can activate the environment by running:
 source activate py3.6  
 ```
 ## Instructions
-To train a DY2P agent on the ```cartpole swingup ``` task from images, you can run:
+To train a Dypre agent on the ```cartpole swingup ``` task from images, you can run:
 ```
 python train.py \
             --domain_name cartpole  \
@@ -24,10 +24,10 @@ python train.py \
             --batch_size 512 \
             --pre_transform_image_size 84 \
             --image_size 84 \
-            --cody_lr 1e-4 \
+            --dypre_lr 1e-4 \
             --results_dir ./logs \
             --time_step 2 \
-            --omega_cody_loss 0.01 \
+            --omega_dypre_loss 0.01 \
             --fc_output_logits True \
             --kl_use_target True \
 ```

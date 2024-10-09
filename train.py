@@ -13,7 +13,7 @@ import utils
 from logger import Logger
 from video import VideoRecorder
 
-from cody_sac import CodySacAgent
+from cody_sac import DypreSacAgent
 
 
 def parse_args():
@@ -26,8 +26,8 @@ def parse_args():
     parser.add_argument('--results-dir', type=str)  # modify
 
     # Hyperparameters
-    parser.add_argument('--cody-lr', type=float)
-    parser.add_argument('--omega-cody-loss', type=float)
+    parser.add_argument('--dypre-lr', type=float)
+    parser.add_argument('--omega-dypre-loss', type=float)
     parser.add_argument('--time-step', type=int)
     parser.add_argument('--intrinsic-reward-scale', type=float)
     parser.add_argument('--use-external-reward', action='store_true')
@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument('--encoder-tau', type=float)
     parser.add_argument('--num-layers', type=int)
     parser.add_argument('--num-filters', type=int)
-    parser.add_argument('--cody-latent-dim', type=int)
+    parser.add_argument('--dypre-latent-dim', type=int)
     # sac
     parser.add_argument('--discount', type=float)
     parser.add_argument('--init-temperature', type=float)
@@ -158,8 +158,8 @@ def evaluate(env, agent, video, num_episodes, L, step, args, viz=False, device=N
 
 
 def make_agent(obs_shape, action_shape, args, device, action_repeat):
-    if args.agent == 'cody_sac':
-        return CodySacAgent(
+    if args.agent == 'dypre_sac':
+        return DypreSacAgent(
             obs_shape=obs_shape,
             action_shape=action_shape,
             device=device,
@@ -186,9 +186,9 @@ def make_agent(obs_shape, action_shape, args, device, action_repeat):
             num_filters=args.num_filters,
             log_interval=args.log_interval,
             detach_encoder=args.detach_encoder,
-            cody_latent_dim=args.cody_latent_dim,
-            cody_lr=args.cody_lr,
-            omega_cody_loss=args.omega_cody_loss,
+            dypre_latent_dim=args.dypre_latent_dim,
+            dypre_lr=args.dypre_lr,
+            omega_dypre_loss=args.omega_dypre_loss,
             time_step=args.time_step,
             intrinsic_reward_scale=args.intrinsic_reward_scale,
             use_external_reward=args.use_external_reward,
@@ -207,7 +207,7 @@ def experiment(
         action_repeat: int = 8,
         frame_stack: int = 3,
         replay_buffer_capacity: int = 100000,
-        agent: str = 'cody_sac',
+        agent: str = 'dypre_sac',
         init_steps: int = 1000,
         num_train_steps: int = 63000,
         batch_size: int = 128,
@@ -229,7 +229,7 @@ def experiment(
         encoder_tau: float = 0.05,
         num_layers: int = 4,
         num_filters: int = 32,
-        cody_latent_dim: int = 128,
+        dypre_latent_dim: int = 128,
         discount: float = 0.99,
         init_temperature: float = 0.1,
         alpha_lr: float = 1e-4,
@@ -240,8 +240,8 @@ def experiment(
         save_model: bool = False,
         save_embedding: bool = False,
         detach_encoder: bool = False,
-        cody_lr: float = 1e-4,
-        omega_cody_loss: float = 1e-5,
+        dypre_lr: float = 1e-4,
+        omega_dypre_loss: float = 1e-5,
         time_step: int = 2,
         intrinsic_reward_scale: float = 0.1,
         use_external_reward: bool = True,
@@ -289,7 +289,7 @@ def experiment(
         encoder_tau=encoder_tau,
         num_layers=num_layers,
         num_filters=num_filters,
-        cody_latent_dim=cody_latent_dim,
+        dypre_latent_dim=dypre_latent_dim,
         discount=discount,
         init_temperature=init_temperature,
         alpha_lr=alpha_lr,
@@ -300,8 +300,8 @@ def experiment(
         save_model=save_model,
         save_embedding=save_embedding,
         detach_encoder=detach_encoder,
-        cody_lr=cody_lr,
-        omega_cody_loss=omega_cody_loss,
+        dypre_lr=dypre_lr,
+        omega_dypre_loss=omega_dypre_loss,
         time_step=time_step,
         intrinsic_reward_scale=intrinsic_reward_scale,
         use_external_reward=use_external_reward,
@@ -343,7 +343,7 @@ def experiment(
     ts = datetime.datetime.fromtimestamp(time.time()).strftime("%m-%d-%H-%M")
     env_name = args.domain_name + '-' + args.task_name
     exp_name = env_name + '-s' + str(args.seed)
-    args.results_dir = args.results_dir + '/' + 'codypro_' + args.domain_name + '/' + exp_name
+    args.results_dir = args.results_dir + '/' + 'dypre_' + args.domain_name + '/' + exp_name
     print(args.results_dir)
 
     utils.make_dir(args.results_dir)
@@ -399,7 +399,7 @@ def experiment(
             L.log('eval/episode', episode, step)
             evaluate(env, agent, video, args.num_eval_episodes, L, step, args, viz=args.save_embedding, embed_viz_dir=embedding_dir, device=device)
             if args.save_model:
-                agent.save_cody(model_dir, step)
+                agent.save_dypre(model_dir, step)
             if args.save_buffer:
                 replay_buffer.save(buffer_dir)
 

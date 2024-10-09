@@ -6,7 +6,7 @@ ef=(1250 2500 2500 5000 5000 2500)
 
 for i in ${!domain[*]}; do
     for s in 0 1 2 3 4; do
-        python train_cluster.py \
+        python train.py \
             --domain_name ${domain[$i]}  \
             --task_name ${task[$i]}  \
             --action_repeat ${ar[$i]} \
@@ -16,10 +16,10 @@ for i in ${!domain[*]}; do
             --batch_size 512 \
             --pre_transform_image_size 84 \
             --image_size 84 \
-            --cody_lr 1e-4 \
+            --dypre_lr 1e-4 \
             --results_dir ./logs \
             --time_step 2 \
-            --omega_cody_loss 0.01 \
+            --omega_dypre_loss 0.01 \
             --fc_output_logits True \
             --kl_use_target True \
             --num_train_steps ${ns[$i]}
