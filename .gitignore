@@ -4,3 +4,4 @@ data/
 finger-sp*
 *.pkl
 .idea/
+./logs/
