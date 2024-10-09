@@ -13,7 +13,7 @@ import utils
 from logger import Logger
 from video import VideoRecorder
 
-from cody_sac import DypreSacAgent
+from dypre_sac import DypreSacAgent
 
 
 def parse_args():
