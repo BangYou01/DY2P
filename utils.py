@@ -5,7 +5,7 @@ import gym
 import os
 from collections import deque
 import random
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import time
 from skimage.util.shape import view_as_windows
 import kornia
@@ -29,9 +29,6 @@ class eval_mode(object):
 
 def soft_update_params(net, target_net, tau):
     for param, target_param in zip(net.parameters(), target_net.parameters()):
-        # target_param.data.copy_(
-        #     tau * param.data + (1 - tau) * target_param.data
-        # )
         target_param.data = param.data * tau + (1 - tau) * target_param.data
 
 
@@ -129,19 +126,13 @@ class ReplayBuffer(Dataset):
         """
         sample a minibatch data and acquire instance discrimination by randomly cropping
         """
-        start = time.time()
         idxs = np.random.randint(
             0, self.capacity if self.full else self.idx, size=self.batch_size
         )
 
         obses = self.obses[idxs]
         next_obses = self.next_obses[idxs]
-        Differ_obs = next_obses - obses
         pos = obses.copy()
-        # randomlly crop obses[BC,H,W] into [B,C,self.image_size,self.image_size]
-        # obses = random_crop(obses, self.image_size)
-        # next_obses = random_crop(next_obses, self.image_size)
-        # pos = random_crop(pos, self.image_size)
 
         obses = torch.as_tensor(obses, device=self.device).float()
         next_obses = torch.as_tensor(
@@ -166,13 +157,11 @@ class ReplayBuffer(Dataset):
         """
         sample a consecutive minibatch data with time length tand acquire instance discrimination by randomly cropping
         """
-        start = time.time()
-
         valid_idxs = np.array([], dtype=int)
 
         while not valid_idxs.size == self.batch_size:
             idxs = np.random.randint(
-                0, self.capacity - t if self.full else self.idx, size=self.batch_size
+                0, self.capacity - t if self.full else self.idx - t, size=self.batch_size
             )
 
             invalid_index = np.array([], dtype=int)
@@ -201,8 +190,6 @@ class ReplayBuffer(Dataset):
         sampled_reward = []
         sampled_not_done = []
 
-        # using valid_idxs makes sure the first not_done is 1.
-        # The second not_done is always 1 since the done=0 is fake.
         not_dones = torch.as_tensor(self.not_dones[valid_idxs], device=self.device)
         sampled_not_done.append(not_dones)
         sampled_not_done.append(not_dones)
@@ -285,21 +272,13 @@ class FrameStack(gym.Wrapper):
         gym.Wrapper.__init__(self, env)
         self._k = k
         self._frames = deque([], maxlen=k)
-        # self._action_frames = deque([],maxlen=k)
         shp = env.observation_space.shape
-        # action_shape = env.action_space.shape
         self.observation_space = gym.spaces.Box(
             low=0,
             high=1,
             shape=((shp[0] * k,) + shp[1:]),
             dtype=env.observation_space.dtype
         )
-        # self.action_space = gym.spaces.Box(
-        #     low=-1,
-        #     high=1,
-        #     shape=(action_shape * k),
-        #     dtype=env.action_space.dtype
-        # )
         self._max_episode_steps = env._max_episode_steps
 
     def reset(self):
@@ -310,8 +289,6 @@ class FrameStack(gym.Wrapper):
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
-        # for i in range(self._k):
-        #   self._action_frames.append(action)
         self._frames.append(obs)
         return self._get_obs(), reward, done, info
 

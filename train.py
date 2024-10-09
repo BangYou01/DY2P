@@ -4,14 +4,9 @@ import argparse
 from experiment_launcher import run_experiment
 from experiment_launcher.launcher import add_launcher_base_args, get_experiment_default_params
 import os
-import math
-import gym
-import sys
-import random
 import time
 import json
 import dmc2gym
-import copy
 import datetime
 
 import utils
@@ -19,15 +14,11 @@ from logger import Logger
 from video import VideoRecorder
 
 from cody_sac import CodySacAgent
-from torchvision import transforms
 
 
 def parse_args():
-    # argparse 模块可以从 sys.argv 解析出command line参数,让人轻松编用户友好的命令行接口。
-    # 使用 argparse 的第一步是创建一个 ArgumentParser 对象
     parser = argparse.ArgumentParser()
     # environment
-    # 给一个 ArgumentParser 添加程序参数信息是通过调用 add_argument() 方法完成的。
     parser.add_argument('--domain-name', type=str)
     parser.add_argument('--task-name', type=str)
     parser.add_argument('--action-repeat', type=int)
@@ -101,7 +92,6 @@ def parse_args():
 
     parser.add_argument('--log-interval', type=int)
 
-    # ArgumentParser 通过 parse_args() 方法解析参数。它将检查命令行，把每个参数转换为适当的类型然后调用相应的操作。
     parser = add_launcher_base_args(parser)
     parser.set_defaults(**get_experiment_default_params(experiment))
     args = parser.parse_args()
@@ -118,7 +108,6 @@ def evaluate(env, agent, video, num_episodes, L, step, args, viz=False, device=N
     '''
     all_ep_rewards = []
 
-    # embedding visualization
     obses = []
     rewards_vis = []
     embeddings = []
@@ -261,8 +250,6 @@ def experiment(
         add_distractor: bool = False,
         img_source: str = 'video',
         total_frames: int = 1000,
-        # resource_files,
-        # eval_resource_files,
         log_interval: int = 100,
         seed: int = 0,
         results_dir: str = '/logs'
@@ -333,60 +320,20 @@ def experiment(
     os.makedirs(results_dir, exist_ok=True)
     utils.set_seed_everywhere(seed)
 
-    if args.add_distractor:
-        from distractor import dmc2gym_local
-        env = dmc2gym_local.make(
-            domain_name=args.domain_name,
-            task_name=args.task_name,
-            resource_files=resource_files,
-            img_source=args.img_source,
-            total_frames=args.total_frames,
-            seed=args.seed,
-            visualize_reward=False,
-            from_pixels=(args.encoder_type == 'pixel'),
-            height=args.pre_transform_image_size,
-            width=args.pre_transform_image_size,
-            frame_skip=args.action_repeat,
-            frame_stack=args.frame_stack,
-            extra='train',
-        )
 
-        eval_env = dmc2gym_local.make(
-            domain_name=args.domain_name,
-            task_name=args.task_name,
-            resource_files=eval_resource_files,
-            img_source=args.img_source,
-            total_frames=args.total_frames,
-            seed=args.seed,
-            visualize_reward=False,
-            from_pixels=(args.encoder_type == 'pixel'),
-            height=args.pre_transform_image_size,
-            width=args.pre_transform_image_size,
-            frame_skip=args.action_repeat,
-            frame_stack=args.frame_stack,
-            extra='eval',
-        )
+    env = dmc2gym.make(
+        domain_name=args.domain_name,
+        task_name=args.task_name,
+        seed=args.seed,
+        visualize_reward=False,
+        from_pixels=(args.encoder_type == 'pixel'),
+        height=args.pre_transform_image_size,
+        width=args.pre_transform_image_size,
+        # Setting frame_skip argument lets to perform action repeat
+        frame_skip=args.action_repeat
+    )
 
-    else:
-        env = dmc2gym.make(
-            # dm_control suite env
-            domain_name=args.domain_name,
-            task_name=args.task_name,
-            # Reliable random seed initialization that will ensure deterministic behaviour.
-            seed=args.seed,
-            visualize_reward=False,
-            # Setting from_pixels=True converts proprioceptive observations into image-based.
-            # In additional, choose the image dimensions, by setting height and width.
-            from_pixels=(args.encoder_type == 'pixel'),
-            height=args.pre_transform_image_size,
-            width=args.pre_transform_image_size,
-            # Setting frame_skip argument lets to perform action repeat
-            frame_skip=args.action_repeat
-        )
-
-    env.seed(args.seed)  # Setting env_seed
-    if args.add_distractor:
-        eval_env.seed(args.seed)
+    env.seed(args.seed)
 
     # stack several consecutive frames together
     if args.encoder_type == 'pixel' and not args.add_distractor:
@@ -428,7 +375,7 @@ def experiment(
         capacity=args.replay_buffer_capacity,
         batch_size=args.batch_size,
         device=device,
-        image_size=args.image_size,  # args.image_size is the size of cropped images
+        image_size=args.image_size,
     )
 
     agent = make_agent(
@@ -450,10 +397,7 @@ def experiment(
 
         if step % args.eval_freq == 0:
             L.log('eval/episode', episode, step)
-            if args.add_distractor:
-                evaluate(eval_env, agent, video, args.num_eval_episodes, L, step, args, viz=args.save_embedding, embed_viz_dir=embedding_dir, device=device)
-            else:
-                evaluate(env, agent, video, args.num_eval_episodes, L, step, args, viz=args.save_embedding, embed_viz_dir=embedding_dir, device=device)
+            evaluate(env, agent, video, args.num_eval_episodes, L, step, args, viz=args.save_embedding, embed_viz_dir=embedding_dir, device=device)
             if args.save_model:
                 agent.save_cody(model_dir, step)
             if args.save_buffer:
@@ -497,12 +441,10 @@ def experiment(
 
 
         # limit infinit bootstrap
-        # the done_bool= 1 is only used to recognize the different trajectories but it should be zero.
         done_bool = 1 if episode_step + 1 == env._max_episode_steps else float(
             done
         )
         episode_reward += reward
-        #print('episode_step:{}, done:{}, done_bool:{}'.format(episode_step, done, done_bool))
         replay_buffer.add(obs, action, reward, next_obs, done_bool)
 
         obs = next_obs
@@ -511,12 +453,5 @@ def experiment(
 
 if __name__ == '__main__':
     torch.multiprocessing.set_start_method('spawn')
-
-    # Additional Info when using cuda
-    # if device.type == 'cuda':
-    #     print(torch.cuda.get_device_name(0))
-    #     print('Memory Usage:')
-    #     print('Allocated:', round(torch.cuda.memory_allocated(0) / 1024 ** 3, 1), 'GB')
-    #     print('Cached:   ', round(torch.cuda.memory_cached(0) / 1024 ** 3, 1), 'GB')
 
     run_experiment(experiment)

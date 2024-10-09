@@ -2,15 +2,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import copy
-import math
 from collections import deque
-# from PIL import Image
 
 import utils
-from encoder import make_encoder, Action_encoder, Transition_model
-
-# import torchviz
+from encoder import make_encoder, Transition_model
 
 LOG_FREQ = 10000
 
@@ -79,10 +74,8 @@ class Actor(nn.Module):
     ):
         obs = self.encoder(obs, detach=detach_encoder)
 
-        # # spilt the self.trunk(obs) into 2 parts along column
         mu, log_std = self.trunk(obs).chunk(2, dim=-1)
 
-        # constrain log_std inside [log_std_min, log_std_max]
         log_std = torch.tanh(log_std)
         log_std = self.log_std_min + 0.5 * (
                 self.log_std_max - self.log_std_min
@@ -164,7 +157,7 @@ class Critic(nn.Module):
         self.apply(weight_init)
 
     def forward(self, obs, action, detach_encoder=False):
-        # detach_encoder allows to stop gradient propogation to encoder
+
         obs = self.encoder(obs, detach=detach_encoder)
 
         q1 = self.Q1(obs, action)
@@ -191,12 +184,7 @@ class Critic(nn.Module):
 
 class Cody(nn.Module):
     """
-    Auxiliary task:
-      encoding --> sensor_fusion --> kl --> (mi, total loss)
-
-    Todolist:
-        1.obs_shape should be a list [rgb_img_shape, depth_img_shape, touch_shape].
-        2.Initialize sensor_fusion net
+    Auxiliary task
     """
 
     def __init__(self, z_dim, critic, critic_target, action_shape,  output_type="continuous", fc_output_logits=True, kl_use_target=True):
@@ -209,10 +197,6 @@ class Cody(nn.Module):
 
         self.kl_use_target = kl_use_target
 
-        # action_feat_dim = 16
-        # self.action_encoder = Action_encoder(action_shape[0], action_feat_dim, output_logits=True)
-        #
-        # self.action_encoder_target = Action_encoder(action_shape[0], action_feat_dim, output_logits=True)
 
         # MLP
         self.fc1 = Transition_model(action_shape[0], z_dim, output_feature_num=z_dim + 1, num_layers=2,
@@ -229,20 +213,12 @@ class Cody(nn.Module):
                                                                self.rgb_img_encoder_target.parameters()):
             param_rgb_encoder_target.data.copy_(param_rgb_encoder.data)
             param_rgb_encoder_target.requires_grad = False
-        # for param_action_encoder, param_action_encoder_target in zip(self.action_encoder.parameters(),
-        #                                                              self.action_encoder_target.parameters()):
-        #     param_action_encoder_target.data.copy_(param_action_encoder.data)
-        #     param_action_encoder_target.requires_grad = False
-        #for param_fc1, param_fc1_target in zip(self.fc1.parameters(), self.fc1_target.parameters()):
-        #    param_fc1_target.data.copy_(param_fc1.data)
-        #    param_fc1_target.requires_grad = False
+
         for param_predictor, param_predictor_target in zip(self.predictor.parameters(),
                                                            self.predictor_target.parameters()):
             param_predictor_target.data.copy_(param_predictor.data)
             param_predictor_target.requires_grad = False
 
-        # Parameter matrix for InfoNCE
-        # self.norm_reward = nn.BatchNorm1d(1)
         self.W = nn.Parameter(torch.rand(z_dim, z_dim))
 
         self.W.requires_grad == True
@@ -252,10 +228,6 @@ class Cody(nn.Module):
         self.apply(weight_init)
 
     def encode(self, obs, action, next_obs, action_condition=False):
-        """
-            obs and next_obs should be lists containing multimodal sensor data
-            action should be stacked and has shape [B, 3xdim]
-        """
 
         # current_step samples
         z = self.rgb_img_encoder(obs)
@@ -283,23 +255,11 @@ class Cody(nn.Module):
         """
         compute the kl divergence between p(z/s,a) and q(z)
         """
-        # solution 1
-        # p = torch.distributions.normal.Normal(loc=mu, scale=torch.exp(logstd))
-        # q = torch.distributions.normal.Normal(loc=torch.zeros_like(mu), scale=torch.ones_like(logstd))
-        # kl = torch.distributions.kl_divergence(p, q)
 
-        # solution 1
-        # kl = torch.mean(-0.5 * torch.sum(1 + 2 * logstd - mu ** 2 - (torch.exp(logstd)) ** 2, dim=1), dim=0)
-
-        #with torch.no_grad():
         if self.kl_use_target:
             z_old_target = self.rgb_img_encoder_target(obs_old)
-                #action_embed_target = self.action_encoder_target(action_old)
-            [mu_q, logstd_q, z_pred] = self.fc2(z_old_target.detach(), action_old, condition=True)
-        #    else:
-        #        z_old_target = self.rgb_img_encoder(obs_old)
-                # action_embed_target = self.action_encoder_target(action_old)
-        #        [mu_q, logstd_q, z_pred] = self.fc1(z_old_target, action_old, condition=True)
+            [mu_q, logstd_q, _] = self.fc2(z_old_target.detach(), action_old, condition=True)
+
         kl = logstd_q - logstd_p + (torch.exp(logstd_p) ** 2 + (mu_p - mu_q) ** 2) / (
                     2 * torch.exp(logstd_q) ** 2) - 0.5
         kl = kl.sum(dim=-1).mean()
@@ -320,7 +280,7 @@ class Cody(nn.Module):
 
 
 class CodySacAgent(object):
-    """Cody representation learning with SAC."""
+    """Representation learning with SAC."""
     def __init__(
             self,
             obs_shape,
@@ -430,20 +390,12 @@ class CodySacAgent(object):
         )
 
         if self.encoder_type == 'pixel':
-            # create Cody encoder (the 128 batch size is probably unnecessary)
             self.cody = Cody(encoder_feature_dim, self.critic, self.critic_target, action_shape,
                              output_type='continuous', fc_output_logits=fc_output_logits, kl_use_target=kl_use_target).to(self.device)
 
-            # optimizer for critic encoder for reconstruction loss
             self.encoder_optimizer = torch.optim.Adam(
                 self.critic.encoder.parameters(), lr=encoder_lr
             )
-            # self.action_encoder_optimizer = torch.optim.Adam(
-            #     self.action_encoder.parameters(), lr=encoder_lr
-            # )
-            # self.transition_model_optimizer = torch.optim.Adam(
-            #     self.transition_model.parameters(), lr=encoder_lr
-            # )
 
             self.cpc_optimizer = torch.optim.Adam(
                 self.cody.parameters(), lr=cody_lr
@@ -487,24 +439,15 @@ class CodySacAgent(object):
 
     def update_critic(self, obs, action, reward, next_obs, not_done, L, step):
         with torch.no_grad():
-            # log_pi is the entropy of current policy pi
             _, policy_action, log_pi, _ = self.actor(next_obs)
-            # computer Q target with clipped double Q trick
             target_Q1, target_Q2 = self.critic_target(next_obs, policy_action)
             target_V = torch.min(target_Q1,
                                  target_Q2) - self.alpha.detach() * log_pi
             target_Q = reward + (not_done * self.discount * target_V)
 
-        # get current Q estimates,
-        # the artical did not detach encoder, so the encoder network is updated by using the critic loss
         current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=self.detach_encoder)
-        # I change the flag detach_encoder=True
-        # current_Q1, current_Q2 = self.critic(obs, action, detach_encoder=True)
         critic_loss = F.mse_loss(current_Q1,
                                  target_Q) + F.mse_loss(current_Q2, target_Q)
-
-        ###visualization
-        # torchviz.make_dot(critic_loss, params=dict(list(self.critic.named_parameters()))).render("critic_pytorchviz", format="png")
 
         if step % self.log_interval == 0:
             L.log('train_critic/loss', critic_loss, step)
@@ -517,7 +460,6 @@ class CodySacAgent(object):
         self.critic.log(L, step)
 
     def update_actor_and_alpha(self, obs, L, step):
-        # detach encoder, so we don't update it with the actor loss
         _, pi, log_pi, log_std = self.actor(obs, detach_encoder=True)
         actor_Q1, actor_Q2 = self.critic(obs, pi, detach_encoder=True)
 
@@ -565,22 +507,9 @@ class CodySacAgent(object):
 
         loss = mi_loss + self.omega_cody_loss * kl
 
-        ###visualization
-        # torchviz.make_dot(loss, params=dict(list(self.cody.named_parameters()))).render("cody_pytorchviz", format="png")
-
-        ####whether need to update encoder parameters
         self.encoder_optimizer.zero_grad()
-        # self.action_encoder_optimizer.zero_grad()
-        # self.transition_model_optimizer.zero_grad()
         self.cpc_optimizer.zero_grad()
         loss.backward()
-
-        # self.action_encoder_optimizer.step()
-        # self.transition_model_optimizer.step()
-
-        # gradient clip
-        # clip_threshold=0.1
-        # torch.nn.utils.clip_grad_norm_(self.cody.parameters(), clip_threshold)
 
         self.encoder_optimizer.step()
         self.cpc_optimizer.step()
@@ -589,14 +518,8 @@ class CodySacAgent(object):
             L.log('train/mi', -1.0 * mi_loss, step)
             L.log('train/kl', kl, step)
 
-        # data6, grad6 = check_back_prop(self.cody)
-
     def update(self, replay_buffer, L, step):
         if self.encoder_type == 'pixel':
-            """
-            obs should be a list containing multimodal sensor data
-            action should be stacked and has shape [B, 3xdim]
-            """
             obs_chunk, action_chunk, reward_chunk, next_obs_chunk, not_done_chunk = replay_buffer.sample_consecutive(
                 self.time_step)
 
@@ -606,7 +529,6 @@ class CodySacAgent(object):
             _, reward = reward_chunk
             _, next_obs = next_obs_chunk
             _, not_done = not_done_chunk
-
 
         else:
             obs, action, reward, next_obs, not_done = replay_buffer.sample_proprio()
@@ -632,11 +554,6 @@ class CodySacAgent(object):
                 self.encoder_tau
             )
 
-            #utils.soft_update_params(
-            #    self.cody.fc1, self.cody.fc1_target,
-            #    self.encoder_tau
-            #)
-
             utils.soft_update_params(
                 self.cody.predictor, self.cody.predictor_target,
                 self.encoder_tau
@@ -653,13 +570,6 @@ class CodySacAgent(object):
             self.critic.state_dict(), '%s/critic_%s.pt' % (model_dir, step)
         )
 
-    def save_cody(self, model_dir, step):
-        torch.save(
-            self.cody.state_dict(), '%s/cody_%s.pt' % (model_dir, step)
-        )
-        torch.save(self.critic.encoder.state_dict(), '%s/critic_encoder_%s.pt' % (model_dir, step))
-        torch.save(self.critic_target.encoder.state_dict(), '%s/critic_target_encoder_%s.pt' % (model_dir, step))
-        torch.save(self.actor.encoder.state_dict(), '%s/actor_encoder_%s.pt' % (model_dir, step))
 
     def load(self, model_dir, step):
         self.actor.load_state_dict(
@@ -668,42 +578,4 @@ class CodySacAgent(object):
         self.critic.load_state_dict(
             torch.load('%s/critic_%s.pt' % (model_dir, step))
         )
-
-    def load_cody(self, model_dir, step):
-        self.critic.encoder.load_state_dict(torch.load('%s/critic_encoder_%s.pt' % (model_dir, step)))
-        self.critic_target.encoder.load_state_dict(torch.load('%s/critic_target_encoder_%s.pt' % (model_dir, step)))
-        self.actor.encoder.load_state_dict(torch.load('%s/actor_encoder_%s.pt' % (model_dir, step)))
-        self.cody.load_state_dict(torch.load('%s/cody_%s.pt' % (model_dir, step)))
-
-    def load_init(self):
-        self.critic_target.load_state_dict(self.critic.state_dict())
-        # critic_target.encoder keep the same parameters with critic.encoder
-        for param_encoder, param_encoder_target in zip(self.critic.encoder.parameters(),
-                                                       self.critic_target.encoder.parameters()):
-            param_encoder_target.data.copy_(param_encoder.data)  # initialize
-            param_encoder_target.requires_grad = False
-            param_encoder.requires_grad = False
-
-        # tie encoders between actor and critic, and Cody and critic
-        self.actor.encoder.copy_conv_weights_from(self.critic.encoder)
-
-        # set requires_grad=False
-        for param_encoder in self.actor.encoder.parameters():
-            param_encoder.requires_grad = False
-        for param in self.cody.parameters():
-            param.requires_grad = False
-
-
-def check_back_prop(model):
-    list_grad = []
-    list_data = []
-    for name, param in model.named_parameters():
-        if param.grad == None:
-            print(name, torch.mean(param.data).cpu().numpy())
-            list_data.append(torch.mean(param.data).cpu().numpy())
-        else:
-            print(name, torch.mean(param.data).cpu().numpy(), torch.mean(param.grad).cpu().numpy())
-            list_data.append(torch.mean(param.data).cpu().numpy())
-            list_grad.append(torch.mean(param.grad).cpu().numpy())
-    return list_data, list_grad
 
