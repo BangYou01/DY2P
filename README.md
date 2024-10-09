@@ -12,7 +12,7 @@ Then you can activate the environment by running:
 source activate py3.6  
 ```
 ## Instructions
-To train a Dypre agent on the ```cartpole swingup ``` task from images, you can run:
+To train a Dypre agent on the ```cartpole swingup ``` task with images,  run the command:
 ```
 python train.py \
             --domain_name cartpole  \
@@ -31,7 +31,7 @@ python train.py \
             --fc_output_logits True \
             --kl_use_target True \
 ```
-or you can run the script for all six tasks:
+To evaluate Dypre on all 6 control tasks, run the train.sh scriptor:
 ```
 bash train.sh
 ```
