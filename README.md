@@ -5,7 +5,11 @@ This repository is the official implementation of Dypre. Our implementation is b
 ## Requirements  
 Required dependencies of this repo can be installed by running:  
 ```sh
-conda env create -f environment.yml  
+conda env create --name dypre python==3.8  
+pip install -r requirements.txt  
+pip install git+https://github.com/denisyarats/dmc2gym.git  
+conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch  
+conda install tensorboard  
 ```
 Then you can activate the environment by running:  
 ```sh
@@ -22,9 +26,6 @@ python train.py \
             --seed 0 \
             --eval_freq 1250 \
             --batch_size 512 \
-            --pre_transform_image_size 84 \
-            --image_size 84 \
-            --dypre_lr 1e-4 \
             --results_dir ./logs \
             --time_step 2 \
             --omega_dypre_loss 0.01 \

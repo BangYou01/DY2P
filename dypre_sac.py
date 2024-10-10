@@ -101,18 +101,6 @@ class Actor(nn.Module):
 
         return mu, pi, log_pi, log_std
 
-    def log(self, L, step, log_freq=LOG_FREQ):
-        if step % log_freq != 0:
-            return
-
-        for k, v in self.outputs.items():
-            L.log_histogram('train_actor/%s_hist' % k, v, step)
-
-        L.log_param('train_actor/fc1', self.trunk[0], step)
-        L.log_param('train_actor/fc2', self.trunk[2], step)
-        L.log_param('train_actor/fc3', self.trunk[4], step)
-
-
 class QFunction(nn.Module):
     """MLP for q-function."""
 
@@ -167,20 +155,6 @@ class Critic(nn.Module):
         self.outputs['q2'] = q2
 
         return q1, q2
-
-    def log(self, L, step, log_freq=LOG_FREQ):
-        if step % log_freq != 0:
-            return
-
-        self.encoder.log(L, step, log_freq)
-
-        for k, v in self.outputs.items():
-            L.log_histogram('train_critic/%s_hist' % k, v, step)
-
-        for i in range(3):
-            L.log_param('train_critic/q1_fc%d' % i, self.Q1.trunk[i * 2], step)
-            L.log_param('train_critic/q2_fc%d' % i, self.Q2.trunk[i * 2], step)
-
 
 class Dypre(nn.Module):
     """
@@ -457,8 +431,6 @@ class DypreSacAgent(object):
         critic_loss.backward()
         self.critic_optimizer.step()
 
-        self.critic.log(L, step)
-
     def update_actor_and_alpha(self, obs, L, step):
         _, pi, log_pi, log_std = self.actor(obs, detach_encoder=True)
         actor_Q1, actor_Q2 = self.critic(obs, pi, detach_encoder=True)
@@ -478,8 +450,6 @@ class DypreSacAgent(object):
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
-
-        self.actor.log(L, step)
 
         self.log_alpha_optimizer.zero_grad()
         alpha_loss = (self.alpha *
